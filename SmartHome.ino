@@ -1,10 +1,11 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include "HUSKYLENS.h"
+#include <HUSKYLENS.h>
 #include <Servo.h>
 #include <DHT.h>
 #include <DS1302.h>
 #include <Adafruit_NeoPixel.h>
+#include <SoftwareSerial.h>
 
 #ifdef __AVR__
 #include <avr/power.h>
@@ -14,6 +15,7 @@
 #define DHTPIN 9
 #define DHTTYPE DHT11
 
+SoftwareSerial btSerial (2, 3);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 HUSKYLENS huskylens;
 Servo myservo;
@@ -34,9 +36,13 @@ unsigned long previousTime = 0;
 unsigned long faceCheckTime;
 int closeAngle = 160;
 int openAngle = 70;
+int start_Temp = 30;
+int stop_Temp = 26;
+
 boolean doorState = 0;
-boolean fanState = 0;
+int fanState = 0;
 boolean ledState = 0;
+String BT_data;
 
 byte  SpecialChar0[8] = {
   B00100,
@@ -77,19 +83,80 @@ void setup() {
   rtc.halt(false);
   rtc.writeProtect(false);
   //rtc.setDOW(WEDNESDAY);
-  //rtc.setTime(21, 4, 0);  // 시, 분, 초
+  //rtc.setTime(14, 25, 0);  // 시, 분, 초
   //rtc.setDate(01, 04, 2023); // 일, 월, 년
   pixels.begin();
   pixels.setBrightness(255);
   pixels.clear();
   pixels.show();
   pinMode(FLAME_PIN, INPUT);
+  btSerial.begin (9600);
   delay(500);
   myservo.detach();
 }
 
 void loop() {
-  Serial.println(analogRead(SOUND_PIN));
+  if (btSerial. available()) {
+    BT_data = btSerial.readStringUntil(0x0A);
+
+    if (BT_data == "OPEN" && doorState == 0) {
+      myservo.attach(SERVO_PIN);
+      myservo.write(openAngle);
+      delay(500);
+      myservo.detach();
+      doorState = 1;
+    }
+
+    if (BT_data == "CLOSE" && doorState == 1) {
+      myservo.attach(SERVO_PIN);
+      myservo.write(closeAngle);
+      delay(500);
+      myservo.detach();
+      doorState = 0;
+    }
+
+    if (BT_data == "LED_ON" && ledState == 0) ledState = 1;
+
+    if (BT_data == "LED_OFF" && ledState == 1) ledState = 0;
+
+    if (BT_data == "FAN_ON" && fanState == 0) fanState = 2;
+
+    if (BT_data == "FAN_OFF" && fanState >= 1) fanState = 0;
+
+    if (BT_data.startsWith("s1")) {
+      String btS = BT_data.substring(2, BT_data.length());
+      start_Temp = btS.toInt();
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Start Temp: ");
+      lcd.print(start_Temp);
+      lcd.print('C');
+      lcd.setCursor(0, 1);
+      lcd.print("Stop Temp: ");
+      lcd.print(stop_Temp);
+      lcd.print('C');
+      delay(3000);
+      lcd.clear();
+      fanState = 0;
+    }
+
+    if (BT_data.startsWith("s2")) {
+      String btS = BT_data.substring(2, BT_data.length());
+      stop_Temp = btS.toInt();
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Start Temp: ");
+      lcd.print(start_Temp);
+      lcd.print('C');
+      lcd.setCursor(0, 1);
+      lcd.print("Stop Temp: ");
+      lcd.print(stop_Temp);
+      lcd.print('C');
+      delay(3000);
+      lcd.clear();
+      fanState = 0;
+    }
+  }
   unsigned long currentTime = millis();
   if ((unsigned long)(currentTime - previousTime) >= 1000) {
     previousTime = currentTime;
@@ -97,13 +164,13 @@ void loop() {
     printDateTime();
   }
   int t = dht. readTemperature();
-  if (t >= 30 && fanState == 0) {
+  if (t >= start_Temp && fanState == 0) {
     fanState = 1;
   }
-  if (t <= 26 && fanState == 1) {
+  if (t <= stop_Temp && fanState == 1) {
     fanState = 0;
   }
-  if (fanState == 1) digitalWrite(RELAY_PIN, LOW);
+  if (fanState >= 1) digitalWrite(RELAY_PIN, LOW);
 
   if (fanState == 0) digitalWrite(RELAY_PIN, HIGH);
 
@@ -114,6 +181,7 @@ void loop() {
     myservo.detach();
     doorState = 1;
   }
+
   if (digitalRead(TOUCH_SENSOR) == 1 && doorState == 1) {
     myservo.attach(SERVO_PIN);
     myservo.write(closeAngle);
@@ -219,13 +287,15 @@ void lcdPrint_DHT11() {
   sprintf(str_t, "%2d", t);
   lcd.print(str_t);
   lcd.print("C" );
-
   lcd.setCursor(11, 1);
   lcd.write(1);
   lcd.print(" ");
   sprintf(str_h, "%2d", h);
   lcd.print(str_h);
   lcd.print("%" );
+
+  String data = String(t) + "," + String(h);
+  btSerial.println(data);
 }
 void printDateTime() {
   t = rtc.getTime();
